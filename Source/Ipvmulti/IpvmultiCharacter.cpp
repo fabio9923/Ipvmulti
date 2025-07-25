@@ -10,9 +10,12 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "InputActionValue.h"
+#include "IpvmultiGameMode.h"
 #include "ThirdPersonMPProjectile.h"
+#include "Blueprint/UserWidget.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/Engine.h"
+#include "Kismet/GameplayStatics.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -66,14 +69,20 @@ AIpvmultiCharacter::AIpvmultiCharacter()
 
 	MaxAmmo = 5;
 	CurrentAmmo = MaxAmmo;
+	
+	GameOverWidgetClass = nullptr;
+	GameOverWidget = nullptr;
+	
+
 }
 
 void AIpvmultiCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	//Replicate current health.
 	DOREPLIFETIME(AIpvmultiCharacter, CurrentHealth);
 	DOREPLIFETIME(AIpvmultiCharacter, CurrentAmmo);
+	DOREPLIFETIME(AIpvmultiCharacter, bIsCarryingObjective);
+	DOREPLIFETIME(AIpvmultiCharacter, bIsDead); 
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -116,6 +125,14 @@ void AIpvmultiCharacter::ReloadAmmo_Implementation()
 
 void AIpvmultiCharacter::OnHealthUpdate_Implementation()
 {
+	if (CurrentHealth <= 0.f)
+	{
+		if (HasAuthority())
+		{
+			MulticastOnDeath();
+		}
+	}
+	
 	//Client-specific functionality
 	if (IsLocallyControlled())
 	{
@@ -151,10 +168,24 @@ void AIpvmultiCharacter::SetCurrentHealth(float healthValue)
 		OnHealthUpdate();
 	}
 }
+void AIpvmultiCharacter::OnRep_IsDead()
+{
+	if(bIsDead)
+	{
+		MulticastOnDeath();
+	}
+}
 float AIpvmultiCharacter::TakeDamage(float DamageTaken, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
 	float damageApplied = CurrentHealth - DamageTaken;
 	SetCurrentHealth(damageApplied);
+    
+	if(CurrentHealth <= 0 && !bIsDead)
+	{
+		bIsDead = true;
+		OnRep_IsDead(); // Solo para cliente local
+	}
+    
 	return damageApplied;
 }
 void AIpvmultiCharacter::NotifyControllerChanged()
@@ -289,4 +320,82 @@ void AIpvmultiCharacter::AddAmmo(int32 Amount)
 		}
 	}
 }
- 
+
+// Modifica MulticastOnDeath_Implementation
+void AIpvmultiCharacter::MulticastOnDeath_Implementation()
+{
+    // 1. Activar ragdoll y deshabilitar movimiento
+    GetMesh()->SetSimulatePhysics(true);
+    GetMesh()->SetCollisionProfileName(TEXT("Ragdoll"));
+    GetCharacterMovement()->DisableMovement();
+    GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+    // 2. Solo en servidor programar el respawn
+    if(HasAuthority())
+    {
+        FTimerHandle RespawnTimer;
+        GetWorld()->GetTimerManager().SetTimer(RespawnTimer, [this]()
+        {
+            if(!IsValid(this)) return;
+            
+            AController* PC = GetController();
+            if(!PC)
+            {
+                UE_LOG(LogTemp, Error, TEXT("No Controller found! Trying to get original..."));
+                PC = Cast<AController>(GetOwner());
+            }
+
+            if(PC)
+            {
+                if(AIpvmultiGameMode* GM = GetWorld()->GetAuthGameMode<AIpvmultiGameMode>())
+                {
+                    // Resetear estado antes del respawn
+                    bIsDead = false;
+                    SetCurrentHealth(GetMaxHealth());
+                    
+                    GM->RestartPlayer(PC);
+                }
+            }
+        }, 3.0f, false);
+    }
+
+    // 3. Mostrar UI solo para jugador local
+    if(IsLocallyControlled())
+    {
+        ClientShowGameOver();
+    }
+}
+
+void AIpvmultiCharacter::ClientShowGameOver_Implementation()
+{
+	if (GameOverWidgetClass)
+	{
+		GameOverWidget = CreateWidget<UUserWidget>(GetWorld(), GameOverWidgetClass);
+		if (GameOverWidget)
+		{
+			GameOverWidget->AddToViewport();
+		}
+	}
+}
+
+void AIpvmultiCharacter::ClientUpdateRespawnTimer_Implementation(int32 SecondsRemaining)
+{
+	if (GameOverWidget)
+	{
+		// Asume que tienes un método en tu widget para actualizar el texto
+		// GameOverWidget->UpdateRespawnTimer(SecondsRemaining);
+	}
+}
+
+void AIpvmultiCharacter::ServerRespawnPlayer_Implementation()
+{
+	if (HasAuthority())
+	{
+		AIpvmultiGameMode* GameMode = Cast<AIpvmultiGameMode>(GetWorld()->GetAuthGameMode());
+		if (GameMode)
+		{
+			GameMode->RestartPlayer(GetController());
+		}
+	}
+}
+

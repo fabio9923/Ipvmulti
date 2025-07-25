@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "GameFramework/PlayerStart.h"
 #include "IpvmultiCharacter.generated.h"
 
 class USpringArmComponent;
@@ -19,6 +20,8 @@ UCLASS(config=Game)
 class AIpvmultiCharacter : public ACharacter
 {
 	GENERATED_BODY()
+
+	
 
 	/** Camera boom positioning the camera behind the character */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
@@ -46,8 +49,11 @@ class AIpvmultiCharacter : public ACharacter
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
 	UInputAction* FireAction;
+	
 
 public:
+	
+	
 	AIpvmultiCharacter();
 	/** Property replication */     
 	void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -96,13 +102,47 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Ammo")
 	void AddAmmo(int32 Amount);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastOnDeath();
+
+	
+	
 protected:
+	UPROPERTY(ReplicatedUsing=OnRep_IsDead, BlueprintReadOnly, Category="Health")
+	bool bIsDead;
+
+	UFUNCTION()
+	void OnRep_IsDead();
 
 	/** Called for movement input */
 	void Move(const FInputActionValue& Value);
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
+	
+    UPROPERTY(EditDefaultsOnly, Category = "UI")
+    TSubclassOf<class UUserWidget> GameOverWidgetClass;
+    
+    UPROPERTY()
+    UUserWidget* GameOverWidget;
+    
+    FTimerHandle RespawnTimerHandle;
+    
+    UFUNCTION(Client, Reliable)
+    void ClientShowGameOver();
+    
+    UFUNCTION(Client, Reliable)
+    void ClientUpdateRespawnTimer(int32 SecondsRemaining);
+    
+    UFUNCTION(Server, Reliable)
+    void ServerRespawnPlayer();
+
+	UPROPERTY(EditDefaultsOnly, Category = "Spawning")
+	TArray<AActor*> PlayerStarts;
+
+	UPROPERTY(Replicated)
+	bool bIsCarryingObjective;
 
 	
 protected:
